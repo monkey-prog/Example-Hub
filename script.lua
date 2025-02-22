@@ -805,6 +805,170 @@ local Toggle = MainTab:CreateToggle({
 })
 
 local Toggle = MainTab:CreateToggle({
+   Name = "Enhanced Aim Bot",
+   CurrentValue = false,
+   Flag = "Toggle1", 
+   Callback = function(Value)
+       if Value then
+           -- Configuration
+           local ASSIST_RANGE = 200       -- Maximum range to detect targets
+           local WALL_CHECK_RANGE = 50    -- Range within which to consider targets even behind walls
+           local UPDATE_RATE = 0.1        -- How often to update targeting
+           local HEAD_OFFSET = Vector3.new(0, 0.1, 0)  -- Fine-tune head targeting
+           local PRIORITY_DISTANCE = 30    -- Distance within which targets get higher priority
+
+           local Players = game:GetService("Players")
+           local RunService = game:GetService("RunService")
+           local Teams = game:GetService("Teams")
+           
+           local LocalPlayer = Players.LocalPlayer
+           local Camera = workspace.CurrentCamera
+           
+           -- Function to check if a player is on the same team
+           local function isTeammate(player)
+               if not LocalPlayer.Team then return false end
+               return player.Team == LocalPlayer.Team
+           end
+           
+           -- Function to check if target is behind a wall
+           local function isTargetVisible(targetPosition, sourcePosition)
+               local ray = Ray.new(sourcePosition, targetPosition - sourcePosition)
+               local hit, hitPosition = workspace:FindPartOnRayWithIgnoreList(
+                   ray,
+                   {LocalPlayer.Character, Camera, workspace:FindFirstChild("Ignore")},
+                   false,
+                   true
+               )
+               
+               if hit then
+                   -- Calculate distance to hit and target
+                   local distanceToHit = (hitPosition - sourcePosition).Magnitude
+                   local distanceToTarget = (targetPosition - sourcePosition).Magnitude
+                   
+                   -- If hit something before target, it's behind a wall
+                   return math.abs(distanceToHit - distanceToTarget) < 5
+               end
+               
+               return true
+           end
+           
+           -- Function to calculate target priority score
+           local function calculateTargetPriority(distance, isVisible, health)
+               local score = 1000 - distance  -- Base score based on distance
+               
+               -- Massive bonus for visible targets
+               if isVisible then
+                   score = score + 2000
+               end
+               
+               -- Bonus for targets within priority distance
+               if distance < PRIORITY_DISTANCE then
+                   score = score + 1500
+               end
+               
+               -- Bonus for lower health targets
+               score = score + (100 - health)
+               
+               return score
+           end
+           
+           -- Function to check if a character is valid target
+           local function isValidTarget(character, player)
+               if not character then return false end
+               
+               -- Check if character has necessary parts
+               local humanoid = character:FindFirstChild("Humanoid")
+               local head = character:FindFirstChild("Head")
+               
+               -- If it's a player, check team status
+               if player then
+                   if isTeammate(player) then return false end
+               end
+               
+               return humanoid 
+                   and head 
+                   and humanoid.Health > 0
+           end
+           
+           -- Function to get best target based on priority
+           local function getBestTarget()
+               local targets = {}
+               local playerChar = LocalPlayer.Character
+               local playerHead = playerChar and playerChar:FindFirstChild("Head")
+               
+               if not playerHead then return nil end
+               
+               -- Gather all potential targets with their priorities
+               for _, player in pairs(Players:GetPlayers()) do
+                   if player ~= LocalPlayer then
+                       local character = player.Character
+                       if isValidTarget(character, player) then
+                           local targetHead = character.Head
+                           local distance = (playerHead.Position - targetHead.Position).Magnitude
+                           
+                           if distance < ASSIST_RANGE then
+                               local isVisible = isTargetVisible(targetHead.Position, playerHead.Position)
+                               local health = character.Humanoid.Health
+                               
+                               -- Only consider targets behind walls if they're within wall check range
+                               if isVisible or distance < WALL_CHECK_RANGE then
+                                   table.insert(targets, {
+                                       character = character,
+                                       distance = distance,
+                                       priority = calculateTargetPriority(distance, isVisible, health)
+                                   })
+                               end
+                           end
+                       end
+                   end
+               end
+               
+               -- Sort targets by priority
+               table.sort(targets, function(a, b)
+                   return a.priority > b.priority
+               end)
+               
+               return targets[1] and targets[1].character or nil
+           end
+           
+           -- Function to smoothly update camera aim
+           local function updateAim()
+               local target = getBestTarget()
+               if not target then return end
+               
+               local targetHead = target.Head
+               local aimPosition = targetHead.Position + HEAD_OFFSET
+               local playerChar = LocalPlayer.Character
+               
+               if playerChar and playerChar:FindFirstChild("Head") then
+                   -- Calculate aim direction
+                   local aimAt = CFrame.lookAt(
+                       Camera.CFrame.Position,
+                       aimPosition
+                   )
+                   
+                   -- Smoothly interpolate camera rotation
+                   -- Faster tracking for closer targets
+                   local distance = (playerChar.Head.Position - targetHead.Position).Magnitude
+                   local smoothness = math.clamp(distance / ASSIST_RANGE, 0.1, 0.3)
+                   Camera.CFrame = Camera.CFrame:Lerp(aimAt, smoothness)
+               end
+           end
+           
+           -- Connect update function
+           _G.AimAssistConnection = RunService.RenderStepped:Connect(updateAim)
+           
+       else
+           -- Cleanup when toggled off
+           if _G.AimAssistConnection then
+               _G.AimAssistConnection:Disconnect()
+               _G.AimAssistConnection = nil
+           end
+       end
+   end
+})
+
+local Toggle = MainTab:CreateToggle({
    Name = "Xray-visual",
    CurrentValue = false,
    Flag = "Toggle1", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
