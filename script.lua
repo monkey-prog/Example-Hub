@@ -1046,6 +1046,61 @@ end
    end,
 })
 
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Create the toggle in your UI
+local Toggle = MainTab:CreateToggle({
+   Name = "Hide Usernames",
+   CurrentValue = false,
+   Flag = "UsernameHider",
+   Callback = function(Value)
+        -- Function to handle username visibility
+        local function updateUsernameVisibility(visible)
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player.Character then
+                    -- Handle the humanoid display name and player name
+                    local humanoid = player.Character:FindFirstChild("Humanoid")
+                    if humanoid then
+                        humanoid.DisplayDistanceType = visible and Enum.HumanoidDisplayDistanceType.Viewer or Enum.HumanoidDisplayDistanceType.None
+                        humanoid.NameDisplayDistance = visible and 100 or 0
+                        humanoid.HealthDisplayDistance = visible and 100 or 0
+                    end
+                    
+                    -- Handle overhead GUI elements if they exist
+                    local head = player.Character:FindFirstChild("Head")
+                    if head then
+                        for _, gui in ipairs(head:GetChildren()) do
+                            if gui:IsA("BillboardGui") or gui:IsA("SurfaceGui") then
+                                gui.Enabled = visible
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Update visibility based on toggle value
+        updateUsernameVisibility(not Value)
+        
+        -- Connect to PlayerAdded event to handle new players
+        Players.PlayerAdded:Connect(function(player)
+            player.CharacterAdded:Connect(function()
+                wait(1) -- Small delay to ensure character is fully loaded
+                updateUsernameVisibility(not Value)
+            end)
+        end)
+        
+        -- Handle when characters are added for existing players
+        for _, player in ipairs(Players:GetPlayers()) do
+            player.CharacterAdded:Connect(function()
+                wait(1)
+                updateUsernameVisibility(not Value)
+            end)
+        end
+   end,
+})
+
 local TeleportTab = Window:CreateTab("🌀Teleport", nil) -- Title, Image
 local TeleportSection = TeleportTab:CreateSection("Teleport")
 
