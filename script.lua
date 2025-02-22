@@ -1049,57 +1049,96 @@ end
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- Create the toggle in your UI
-local Toggle = MainTab:CreateToggle({
-   Name = "Hide Usernames",
-   CurrentValue = false,
-   Flag = "UsernameHider",
-   Callback = function(Value)
-        -- Function to handle username visibility
-        local function updateUsernameVisibility(visible)
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player.Character then
-                    -- Handle the humanoid display name and player name
-                    local humanoid = player.Character:FindFirstChild("Humanoid")
-                    if humanoid then
-                        humanoid.DisplayDistanceType = visible and Enum.HumanoidDisplayDistanceType.Viewer or Enum.HumanoidDisplayDistanceType.None
-                        humanoid.NameDisplayDistance = visible and 100 or 0
-                        humanoid.HealthDisplayDistance = visible and 100 or 0
-                    end
-                    
-                    -- Handle overhead GUI elements if they exist
-                    local head = player.Character:FindFirstChild("Head")
-                    if head then
-                        for _, gui in ipairs(head:GetChildren()) do
-                            if gui:IsA("BillboardGui") or gui:IsA("SurfaceGui") then
-                                gui.Enabled = visible
-                            end
-                        end
-                    end
-                end
+-- Utility function to safely access character components
+local function getCharacterComponents(player)
+    local character = player.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    local head = character:FindFirstChild("Head")
+    
+    return {
+        character = character,
+        humanoid = humanoid,
+        head = head
+    }
+end
+
+-- Function to hide overhead UI elements
+local function toggleOverheadUI(instance, visible)
+    for _, child in ipairs(instance:GetChildren()) do
+        if child:IsA("BillboardGui") or child:IsA("SurfaceGui") then
+            child.Enabled = visible
+        end
+    end
+end
+
+-- Main visibility update function
+local function updateUsernameVisibility(visible)
+    for _, player in ipairs(Players:GetPlayers()) do
+        local components = getCharacterComponents(player)
+        if components then
+            if components.humanoid then
+                -- Update humanoid display properties
+                components.humanoid.DisplayDistanceType = visible and 
+                    Enum.HumanoidDisplayDistanceType.Viewer or 
+                    Enum.HumanoidDisplayDistanceType.None
+                components.humanoid.NameDisplayDistance = visible and 100 or 0
+                components.humanoid.HealthDisplayDistance = visible and 100 or 0
+            end
+            
+            if components.head then
+                toggleOverheadUI(components.head, visible)
+            end
+            
+            -- Handle any custom nametags or UI elements
+            local customUI = components.character:FindFirstChild("PlayerUI")
+            if customUI then
+                toggleOverheadUI(customUI, visible)
             end
         end
-        
-        -- Update visibility based on toggle value
-        updateUsernameVisibility(not Value)
-        
-        -- Connect to PlayerAdded event to handle new players
-        Players.PlayerAdded:Connect(function(player)
-            player.CharacterAdded:Connect(function()
-                wait(1) -- Small delay to ensure character is fully loaded
-                updateUsernameVisibility(not Value)
-            end)
-        end)
-        
-        -- Handle when characters are added for existing players
-        for _, player in ipairs(Players:GetPlayers()) do
-            player.CharacterAdded:Connect(function()
-                wait(1)
-                updateUsernameVisibility(not Value)
-            end)
+    end
+end
+
+-- Setup character added handler
+local function setupCharacterAddedHandler(player, visible)
+    player.CharacterAdded:Connect(function(character)
+        task.wait(0.5) -- Using task.wait for better performance
+        local components = getCharacterComponents(player)
+        if components then
+            updateUsernameVisibility(visible)
         end
-   end,
-})
+    end)
+end
+
+-- Create the toggle in your UI
+local function createUsernameToggle(MainTab)
+    local isVisible = true -- Track current visibility state
+    
+    local Toggle = MainTab:CreateToggle({
+        Name = "Hide Usernames",
+        CurrentValue = false,
+        Flag = "UsernameHider",
+        Callback = function(Value)
+            isVisible = not Value
+            updateUsernameVisibility(isVisible)
+            
+            -- Setup handlers for existing players
+            for _, player in ipairs(Players:GetPlayers()) do
+                setupCharacterAddedHandler(player, isVisible)
+            end
+        end
+    })
+    
+    -- Handle new players joining
+    Players.PlayerAdded:Connect(function(player)
+        setupCharacterAddedHandler(player, isVisible)
+    end)
+    
+    return Toggle
+end
+
+return createUsernameToggle
 
 local TeleportTab = Window:CreateTab("🌀Teleport", nil) -- Title, Image
 local TeleportSection = TeleportTab:CreateSection("Teleport")
