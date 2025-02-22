@@ -813,9 +813,13 @@ local Toggle = MainTab:CreateToggle({
            -- Configuration
            local ASSIST_RANGE = 200       -- Maximum range to detect targets
            local WALL_CHECK_RANGE = 50    -- Range within which to consider targets even behind walls
+           local CLOSE_RANGE = 25         -- Range for super high priority close targets
            local UPDATE_RATE = 0.1        -- How often to update targeting
            local HEAD_OFFSET = Vector3.new(0, 0.1, 0)  -- Fine-tune head targeting
-           local PRIORITY_DISTANCE = 30    -- Distance within which targets get higher priority
+           
+           -- Angle configuration
+           local MAX_ANGLE = math.rad(180)  -- Maximum angle to consider targets
+           local CLOSE_ANGLE = math.rad(90) -- Angle for close range priority boost
 
            local Players = game:GetService("Players")
            local RunService = game:GetService("RunService")
@@ -830,44 +834,87 @@ local Toggle = MainTab:CreateToggle({
                return player.Team == LocalPlayer.Team
            end
            
-           -- Function to check if target is behind a wall
+           -- Function to check if target is visible (accounting for partial cover)
            local function isTargetVisible(targetPosition, sourcePosition)
-               local ray = Ray.new(sourcePosition, targetPosition - sourcePosition)
-               local hit, hitPosition = workspace:FindPartOnRayWithIgnoreList(
-                   ray,
-                   {LocalPlayer.Character, Camera, workspace:FindFirstChild("Ignore")},
-                   false,
-                   true
-               )
+               -- Check multiple points around the target to handle partial cover
+               local checkPoints = {
+                   targetPosition,
+                   targetPosition + Vector3.new(0, 1, 0),    -- Head level
+                   targetPosition + Vector3.new(0.5, 0, 0),  -- Right
+                   targetPosition + Vector3.new(-0.5, 0, 0), -- Left
+                   targetPosition + Vector3.new(0, 0, 0.5),  -- Front
+                   targetPosition + Vector3.new(0, 0, -0.5)  -- Back
+               }
                
-               if hit then
-                   -- Calculate distance to hit and target
-                   local distanceToHit = (hitPosition - sourcePosition).Magnitude
-                   local distanceToTarget = (targetPosition - sourcePosition).Magnitude
+               for _, point in ipairs(checkPoints) do
+                   local ray = Ray.new(sourcePosition, point - sourcePosition)
+                   local hit, hitPosition = workspace:FindPartOnRayWithIgnoreList(
+                       ray,
+                       {LocalPlayer.Character, Camera, workspace:FindFirstChild("Ignore")},
+                       false,
+                       true
+                   )
                    
-                   -- If hit something before target, it's behind a wall
-                   return math.abs(distanceToHit - distanceToTarget) < 5
+                   if hit then
+                       local distanceToHit = (hitPosition - sourcePosition).Magnitude
+                       local distanceToPoint = (point - sourcePosition).Magnitude
+                       
+                       -- If any point is visible, consider the target partially visible
+                       if math.abs(distanceToHit - distanceToPoint) < 5 then
+                           return true
+                       end
+                   else
+                       return true
+                   end
                end
                
-               return true
+               return false
            end
            
-           -- Function to calculate target priority score
-           local function calculateTargetPriority(distance, isVisible, health)
-               local score = 1000 - distance  -- Base score based on distance
+           -- Function to calculate angle to target
+           local function getTargetAngle(targetPosition)
+               local playerChar = LocalPlayer.Character
+               if not playerChar or not playerChar:FindFirstChild("HumanoidRootPart") then return MAX_ANGLE end
                
-               -- Massive bonus for visible targets
+               local lookVector = Camera.CFrame.LookVector
+               local toTarget = (targetPosition - Camera.CFrame.Position).Unit
+               
+               return math.acos(lookVector:Dot(toTarget))
+           end
+           
+           -- Enhanced priority calculation
+           local function calculateTargetPriority(distance, isVisible, health, angle)
+               local score = 0
+               
+               -- Base distance score (higher for closer targets)
+               score = score + (ASSIST_RANGE - distance) * 10
+               
+               -- Massive bonus for close range targets
+               if distance < CLOSE_RANGE then
+                   score = score + 10000  -- Huge priority boost for close targets
+                   
+                   -- Additional boost for close targets in front of player
+                   if angle < CLOSE_ANGLE then
+                       score = score + 5000
+                   end
+               end
+               
+               -- Visibility bonus
                if isVisible then
-                   score = score + 2000
+                   score = score + 3000
+                   
+                   -- Extra bonus for visible targets in close range
+                   if distance < CLOSE_RANGE then
+                       score = score + 7000
+                   end
                end
                
-               -- Bonus for targets within priority distance
-               if distance < PRIORITY_DISTANCE then
-                   score = score + 1500
-               end
+               -- Angle priority (favor targets more in front of player)
+               local anglePriority = (MAX_ANGLE - angle) * 1000
+               score = score + anglePriority
                
-               -- Bonus for lower health targets
-               score = score + (100 - health)
+               -- Health consideration (slight preference for lower health targets)
+               score = score + (100 - health) * 10
                
                return score
            end
@@ -876,11 +923,9 @@ local Toggle = MainTab:CreateToggle({
            local function isValidTarget(character, player)
                if not character then return false end
                
-               -- Check if character has necessary parts
                local humanoid = character:FindFirstChild("Humanoid")
                local head = character:FindFirstChild("Head")
                
-               -- If it's a player, check team status
                if player then
                    if isTeammate(player) then return false end
                end
@@ -890,7 +935,7 @@ local Toggle = MainTab:CreateToggle({
                    and humanoid.Health > 0
            end
            
-           -- Function to get best target based on priority
+           -- Enhanced target selection
            local function getBestTarget()
                local targets = {}
                local playerChar = LocalPlayer.Character
@@ -898,7 +943,6 @@ local Toggle = MainTab:CreateToggle({
                
                if not playerHead then return nil end
                
-               -- Gather all potential targets with their priorities
                for _, player in pairs(Players:GetPlayers()) do
                    if player ~= LocalPlayer then
                        local character = player.Character
@@ -907,15 +951,16 @@ local Toggle = MainTab:CreateToggle({
                            local distance = (playerHead.Position - targetHead.Position).Magnitude
                            
                            if distance < ASSIST_RANGE then
+                               local angle = getTargetAngle(targetHead.Position)
                                local isVisible = isTargetVisible(targetHead.Position, playerHead.Position)
                                local health = character.Humanoid.Health
                                
-                               -- Only consider targets behind walls if they're within wall check range
-                               if isVisible or distance < WALL_CHECK_RANGE then
+                               -- Consider all close range targets, visible or not
+                               if distance < CLOSE_RANGE or isVisible or distance < WALL_CHECK_RANGE then
                                    table.insert(targets, {
                                        character = character,
                                        distance = distance,
-                                       priority = calculateTargetPriority(distance, isVisible, health)
+                                       priority = calculateTargetPriority(distance, isVisible, health, angle)
                                    })
                                end
                            end
@@ -923,7 +968,6 @@ local Toggle = MainTab:CreateToggle({
                    end
                end
                
-               -- Sort targets by priority
                table.sort(targets, function(a, b)
                    return a.priority > b.priority
                end)
@@ -931,7 +975,7 @@ local Toggle = MainTab:CreateToggle({
                return targets[1] and targets[1].character or nil
            end
            
-           -- Function to smoothly update camera aim
+           -- Smoother aim function
            local function updateAim()
                local target = getBestTarget()
                if not target then return end
@@ -941,16 +985,21 @@ local Toggle = MainTab:CreateToggle({
                local playerChar = LocalPlayer.Character
                
                if playerChar and playerChar:FindFirstChild("Head") then
-                   -- Calculate aim direction
                    local aimAt = CFrame.lookAt(
                        Camera.CFrame.Position,
                        aimPosition
                    )
                    
-                   -- Smoothly interpolate camera rotation
-                   -- Faster tracking for closer targets
+                   -- Dynamic smoothing based on distance
                    local distance = (playerChar.Head.Position - targetHead.Position).Magnitude
-                   local smoothness = math.clamp(distance / ASSIST_RANGE, 0.1, 0.3)
+                   local smoothness
+                   
+                   if distance < CLOSE_RANGE then
+                       smoothness = 0.6  -- Faster tracking for very close targets
+                   else
+                       smoothness = math.clamp(0.2 + (distance / ASSIST_RANGE) * 0.3, 0.2, 0.4)
+                   end
+                   
                    Camera.CFrame = Camera.CFrame:Lerp(aimAt, smoothness)
                end
            end
